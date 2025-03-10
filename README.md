@@ -21,8 +21,8 @@ Manta Insights is a streamlined tool designed to help hackathon organizers and j
 
 - Python 3.8+
 - GitHub API token
-- Anthropic API key (for Claude)
-- Required Python packages: pandas, numpy, requests, PyGithub, anthropic, python-dotenv
+- LLM Provider API Key
+- Required Python packages: pandas, numpy, requests, PyGithub, anthropic (Whatever Inference Provider), python-dotenv
 
 ## Installation
 
