@@ -4,8 +4,6 @@
 
 Manta Insights is a streamlined tool designed to help hackathon organizers and judges evaluate submissions with the power of AI. The system leverages GitHub data and Claude's AI capabilities to provide comprehensive project analysis, categorization, and scoring.
 
-![Manta Insights](https://via.placeholder.com/800x200/2563eb/ffffff?text=Manta+Insights)
-
 ## Features
 
 - **GitHub Repository Analysis**: Automatically extracts technologies used and README content
