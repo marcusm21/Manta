@@ -1,0 +1,40 @@
+#!/bin/bash
+# Manta Insights Usage Examples
+
+# Basic usage with required parameters
+python manta_insights.py hackathon_submissions.csv --github-token YOUR_GITHUB_TOKEN --anthropic-key YOUR_ANTHROPIC_KEY
+
+# Use environment variables for API keys (more secure)
+export GITHUB_TOKEN=your_github_token
+export ANTHROPIC_API_KEY=your_anthropic_key
+
+python manta_insights.py hackathon_submissions.csv \
+  --github-token $GITHUB_TOKEN \
+  --anthropic-key $ANTHROPIC_API_KEY
+
+# Analyze with custom output directory
+python manta_insights.py hackathon_submissions.csv \
+  --github-token $GITHUB_TOKEN \
+  --anthropic-key $ANTHROPIC_API_KEY \
+  --output results_january_hackathon
+
+# Process a limited set of submissions for testing
+python manta_insights.py hackathon_submissions.csv \
+  --github-token $GITHUB_TOKEN \
+  --anthropic-key $ANTHROPIC_API_KEY \
+  --max-repos 3 \
+  --verbose
+
+# Enable verbose logging
+python manta_insights.py hackathon_submissions.csv \
+  --github-token $GITHUB_TOKEN \
+  --anthropic-key $ANTHROPIC_API_KEY \
+  --verbose
+
+# Create a simple batch file for Windows users
+# Run with: batch_analyze.bat submissions.csv output_folder
+# 
+# @echo off
+# set GITHUB_TOKEN=your_github_token
+# set ANTHROPIC_API_KEY=your_anthropic_key
+# python manta_insights.py %1 --github-token %GITHUB_TOKEN% --anthropic-key %ANTHROPIC_API_KEY% --output %2
