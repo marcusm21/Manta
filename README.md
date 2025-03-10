@@ -3,6 +3,9 @@
 ## AI-Powered Hackathon Analysis System
 
 Manta Insights is a streamlined tool designed to help hackathon organizers and judges evaluate submissions with the power of AI. The system leverages GitHub data and Claude's AI capabilities to provide comprehensive project analysis, categorization, and scoring.
+
+
+
 ![Adobe Express - file](https://github.com/user-attachments/assets/2cd0c6cd-795d-423f-aca6-177319c5b77c)
 
 
