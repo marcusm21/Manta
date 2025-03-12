@@ -18,9 +18,9 @@ from datetime import datetime
 load_dotenv()
 
 class MantaInsights:
-    """Simplified Manta Insights: AI-Powered Hackathon Analysis System"""
+    """Manta Insights: AI-Powered Hackathon Analysis System"""
     
-    VERSION = "1.0.0"
+    VERSION = "1.0.1"
     
     def __init__(self, github_token, anthropic_api_key, verbose=False):
         """Initialize Manta Insights with API access"""
@@ -135,10 +135,15 @@ class MantaInsights:
         df['repo_error'] = None
         df['languages'] = df.apply(lambda x: [], axis=1)
         df['readme'] = None
+        df['disqualified'] = False
+        df['disqualification_reason'] = None
         
         # Process each repository
         for idx, row in df.iterrows():
             if pd.isna(row.get('github_url')) or not isinstance(row.get('github_url'), str):
+                # Mark projects without GitHub URLs as disqualified
+                df.at[idx, 'disqualified'] = True
+                df.at[idx, 'disqualification_reason'] = "No valid GitHub URL provided"
                 continue
                 
             try:
@@ -146,7 +151,9 @@ class MantaInsights:
                 repo_url = row['github_url']
                 repo_parts = repo_url.rstrip('/').split('/')
                 if len(repo_parts) < 5 or 'github.com' not in repo_parts:
-                    raise ValueError(f"Invalid GitHub URL format: {repo_url}")
+                    df.at[idx, 'disqualified'] = True
+                    df.at[idx, 'disqualification_reason'] = f"Invalid GitHub URL format: {repo_url}"
+                    continue
                     
                 repo_owner = repo_parts[-2]
                 repo_name = repo_parts[-1]
@@ -169,14 +176,18 @@ class MantaInsights:
             except Exception as e:
                 self.logger.error(f"Error processing repo at index {idx}: {str(e)}")
                 df.at[idx, 'repo_error'] = str(e)
+                df.at[idx, 'disqualified'] = True
+                df.at[idx, 'disqualification_reason'] = f"Repository access error: {str(e)}"
         
         return df
     
     def _analyze_with_llm(self, df):
-        """Analyze projects using Claude to provide insights"""
+        """Analyze projects using LLM to provide insights"""
         # Initialize LLM analysis columns
         df['analysis'] = None
         df['project_type'] = None
+        df['disqualified'] = df['disqualified'] if 'disqualified' in df.columns else False  
+        df['disqualification_reason'] = df['disqualification_reason'] if 'disqualification_reason' in df.columns else None  
         df['innovation_score'] = 0.0
         df['technical_complexity'] = 0.0
         df['presentation_quality'] = 0.0
@@ -184,13 +195,18 @@ class MantaInsights:
         
         # Process each project
         for idx, row in df.iterrows():
+            # Skip already disqualified projects
+            if row.get('disqualified', False):
+                self.logger.info(f"Skipping LLM analysis for disqualified project: {row.get('project_name', f'project_{idx}')}")
+                continue
+                
             try:
                 self.logger.info(f"Analyzing project: {row.get('project_name', f'project_{idx}')}")
                 
                 # Create prompt with all available information
                 prompt = self._create_analysis_prompt(row)
                 
-                # Generate analysis with Claude
+                # Generate analysis with the LLM
                 response = self.anthropic_client.messages.create(
                     model="claude-3-sonnet-20240229",
                     max_tokens=2000,
@@ -201,16 +217,23 @@ class MantaInsights:
                 
                 analysis = response.content[0].text
                 
-                # Extract scores and project type from the analysis
-                scores, project_type = self._extract_scores(analysis)
+                # Extract scores, project type, and disqualification status from the analysis
+                scores, project_type, disqualified, disqualification_reason = self._extract_scores(analysis)
                 
                 # Update DataFrame
                 df.at[idx, 'analysis'] = analysis
                 df.at[idx, 'project_type'] = project_type
-                df.at[idx, 'innovation_score'] = scores.get('innovation', 0.0)
-                df.at[idx, 'technical_complexity'] = scores.get('technical', 0.0)
-                df.at[idx, 'presentation_quality'] = scores.get('presentation', 0.0)
-                df.at[idx, 'overall_score'] = scores.get('overall', 0.0)
+                df.at[idx, 'disqualified'] = disqualified
+                
+                if disqualified and disqualification_reason:
+                    df.at[idx, 'disqualification_reason'] = disqualification_reason
+                    
+                # Only set scores if not disqualified
+                if not disqualified:
+                    df.at[idx, 'innovation_score'] = scores.get('innovation', 0.0)
+                    df.at[idx, 'technical_complexity'] = scores.get('technical', 0.0)
+                    df.at[idx, 'presentation_quality'] = scores.get('presentation', 0.0)
+                    df.at[idx, 'overall_score'] = scores.get('overall', 0.0)
                 
                 # Add delay to avoid rate limits
                 time.sleep(2)
@@ -221,7 +244,7 @@ class MantaInsights:
         return df
     
     def _create_analysis_prompt(self, project_row):
-        """Create a comprehensive prompt for Claude to analyze the project"""
+        """Create a comprehensive prompt for LLM to analyze the project"""
         
         project_name = project_row.get('project_name', 'Unnamed Project')
         team_name = project_row.get('team_name', 'Unknown Team')
@@ -248,8 +271,16 @@ class MantaInsights:
         {readme_text}
         
         Please provide:
+
+        1. CODE QUALITY CHECK: Examine the project description and README. If you detect clear evidence of any of the following issues, explain why and classify the project as 'DISQUALIFIED':
+            - Plagiarism or stolen code
+            - Submission of pre-existing projects without significant new development
+            - Completely empty or non-functional repositories
+            - Obviously fake/generated projects with no real implementation
+
+        If none of these issues are detected, classify as 'QUALIFIED' and continue with the full analysis.
         
-        1. PROJECT TYPE: Classify this project into exactly ONE of the following categories:
+        2. PROJECT TYPE: Classify this project into exactly ONE of the following categories:
             - Gaming: Games, game platforms, gaming-related tools
             - DeFi: Decentralized finance, trading, financial applications
             - Infra: Infrastructure, developer tools, frameworks
@@ -257,23 +288,29 @@ class MantaInsights:
             - Security: Security tools, auditing, protection
             - Other: Projects that don't fit neatly in other categories
 
-
-        2. ANALYSIS: A 300-word analysis of the project covering:
+        3. ANALYSIS: A 300-word analysis of the project covering:
            - What the project does
            - Technical approach
            - Strengths and weaknesses
            - Innovative aspects
            - Potential improvements
         
-        3. SCORES: Rate each category from 0-10
+        4. SCORES: Rate each category from 0-10
            - Innovation Score: How creative and novel is the project?
            - Technical Complexity: How technically challenging is the implementation?
            - Presentation Quality: How well is the project documented and presented?
            - Overall Score: Overall impression of the project
            
-        4. EXECUTIVE SUMMARY: A 100-word summary highlighting the key points for judges
+        5. EXECUTIVE SUMMARY: A 100-word summary highlighting the key points for judges
         
         FORMAT YOUR RESPONSE LIKE THIS:
+        
+        ## Qualification Status
+        [QUALIFIED or DISQUALIFIED]
+        [If disqualified, explain why]
+        
+        ## Project Type
+        [Category name]
         
         ## Analysis
         [Your analysis here]
@@ -291,7 +328,7 @@ class MantaInsights:
         return prompt
     
     def _extract_scores(self, analysis_text):
-        """Extract numerical scores and project type from the analysis text"""
+        """Extract numerical scores, project type, and qualification status from the analysis text"""
         scores = {
             'innovation': 0.0,
             'technical': 0.0,
@@ -300,21 +337,54 @@ class MantaInsights:
         }
         
         project_type = "Other"  # Default value
+        disqualified = False
+        disqualification_reason = None
         
         try:
+            # Look for qualification status
+            qualification_section = False
+            for line in analysis_text.split('\n'):
+                line = line.strip()
+                
+                if line == "## Qualification Status":
+                    qualification_section = True
+                    continue
+                    
+                if qualification_section and line and not line.startswith("##"):
+                    if "DISQUALIFIED" in line:
+                        disqualified = True
+                        disqualification_reason = line
+                    break
+            
+            # If disqualified, get reason from next line(s)
+            if disqualified and not disqualification_reason:
+                capture_reason = False
+                reason_lines = []
+                for line in analysis_text.split('\n'):
+                    line = line.strip()
+                    if line == "DISQUALIFIED":
+                        capture_reason = True
+                        continue
+                    if capture_reason and line and not line.startswith("##"):
+                        reason_lines.append(line)
+                    elif capture_reason and line.startswith("##"):
+                        break
+                if reason_lines:
+                    disqualification_reason = " ".join(reason_lines)
+            
             # Look for project type
             type_section = False
             for line in analysis_text.split('\n'):
                 line = line.strip()
-            
+                
                 if line == "## Project Type":
                     type_section = True
                     continue
-                
-                if type_section and line and line != "## Analysis":
+                    
+                if type_section and line and not line.startswith("##"):
                     project_type = line
                     break
-                
+                    
             # Look for scores in the format "Category: X/10"
             for line in analysis_text.split('\n'):
                 line = line.strip()
@@ -334,10 +404,10 @@ class MantaInsights:
                 elif line.startswith('Overall:'):
                     score_text = line.split(':')[1].strip().split('/')[0]
                     scores['overall'] = float(score_text)
-        except:
-            self.logger.warning("Could not extract scores from analysis text")
-            
-        return scores, project_type
+        except Exception as e:
+            self.logger.warning(f"Could not extract scores/status from analysis text: {str(e)}")
+                
+        return scores, project_type, disqualified, disqualification_reason
     
     def _generate_reports(self, df, output_dir):
         """Generate project reports in Markdown format"""
@@ -348,34 +418,61 @@ class MantaInsights:
         # Create index file
         index_content = "# Manta Insights: Project Reports\n\n"
         index_content += f"Generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-        index_content += "## Projects\n\n"
         
-        # Sort projects by overall score
-        sorted_df = df.sort_values('overall_score', ascending=False)
+        # Create separate sections for qualified and disqualified projects
+        index_content += "## Qualified Projects\n\n"
         
-        # Create report for each project
-        for idx, project in sorted_df.iterrows():
+        # Sort qualified projects by overall score
+        qualified_df = df[~df['disqualified']].sort_values('overall_score', ascending=False)
+        
+        # Add qualified projects to index
+        for idx, project in qualified_df.iterrows():
             project_name = project.get('project_name', f'project_{idx}')
             safe_name = ''.join(c if c.isalnum() or c in ['-', '_'] else '_' for c in project_name)
-            
-            # Add to index
             score = project.get('overall_score', 0)
             index_content += f"- [{project_name}]({safe_name}.md) - Score: {score:.1f}/10\n"
+        
+        # Add disqualified projects section
+        index_content += "\n## Disqualified Projects\n\n"
+        
+        # Get disqualified projects
+        disqualified_df = df[df['disqualified']]
+        
+        # Add disqualified projects to index
+        for idx, project in disqualified_df.iterrows():
+            project_name = project.get('project_name', f'project_{idx}')
+            safe_name = ''.join(c if c.isalnum() or c in ['-', '_'] else '_' for c in project_name)
+            reason = project.get('disqualification_reason', 'Unknown reason')
+            # Truncate reason if it's too long
+            short_reason = reason[:100] + "..." if len(reason) > 100 else reason
+            index_content += f"- [{project_name}]({safe_name}.md) - Reason: {short_reason}\n"
+        
+        # Create report for each project (both qualified and disqualified)
+        for idx, project in df.iterrows():
+            project_name = project.get('project_name', f'project_{idx}')
+            safe_name = ''.join(c if c.isalnum() or c in ['-', '_'] else '_' for c in project_name)
             
             # Create report content
             report_content = f"# {project_name}\n\n"
             report_content += f"**Team:** {project.get('team_name', 'Unknown')}\n\n"
-            report_content += f"**Project Type:** {project.get('project_type', 'Not classified')}\n\n"
+            
+            # Add disqualification status
+            if project.get('disqualified', False):
+                report_content += f"**Status: DISQUALIFIED**\n\n"
+                report_content += f"**Reason:** {project.get('disqualification_reason', 'No reason provided')}\n\n"
+            else:
+                report_content += f"**Status: QUALIFIED**\n\n"
+                report_content += f"**Project Type:** {project.get('project_type', 'Not classified')}\n\n"
             
             # Add GitHub link if available
             if project.get('github_url'):
                 report_content += f"**GitHub:** [{project.get('github_url')}]({project.get('github_url')})\n\n"
             
-            # Add technologies if available
-            if project.get('languages') and len(project.get('languages')) > 0:
+            # Add technologies if available and project is qualified
+            if not project.get('disqualified', False) and project.get('languages') and len(project.get('languages')) > 0:
                 report_content += f"**Technologies:** {', '.join(project.get('languages'))}\n\n"
             
-            # Add analysis
+            # Add analysis if available
             if project.get('analysis'):
                 report_content += f"{project.get('analysis')}\n\n"
             
